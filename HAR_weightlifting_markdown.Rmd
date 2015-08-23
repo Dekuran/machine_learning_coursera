@@ -1,28 +1,27 @@
 ---
 title: "Machine Learning Assignment Using Exercise Data"
 author: "Declan Clowry"
-date: "26 July 2015"
+date: "23 August 2015"
 output: html_document
 ---
 
 ##Introduction & Summary
 This assignment uses data from the Human Activity Recognition project (Velloso et al. 2013) using various wearable devices to track movement during exercise with weights where the participants were asked to perform exercises both correctly (classe = A) and with one of 4 common mistakes (classe = B:E )
 
-The purpose of the assignment was to use machine learning techniques to create a model that predicts whether the exercises were performed correctly or incorrectly.
+The purpose of the assignment was to use machine learning techniques to create a model that predicts whether there was a mistake and if so which mistake class it fell into.
 
 Given the large number of variables and the difficulty of comparing them all visually to find a human-generated set of predictors, a random forest model was chosen to try many different combinations of predictors and split points.
 
-This resulted in a model with an expected out of sample error of 25%.
+This resulted in a model with an expected out of sample error of 0.68%%.
 
 ##Methods
 First several useful packages for creating the model, plotting the results, and speeding up performance were identified and loaded:
-```{r}
+```{r, echo=FALSE}
 require(ggplot2)
 require(caret)
 require(curl)
-require(doParallel)
-registerDoParallel(cores=2)
 require(randomForest)
+require(dplyr)
 ```
 
 Next the training data was downloaded, turned into an R object.
@@ -31,17 +30,24 @@ Next the training data was downloaded, turned into an R object.
 ## let's get the training data now
 trainurl<-'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
 download.file(trainurl,destfile="train.csv", method="curl")
-train<-read.csv("train.csv" )
+train<-read.csv("train.csv",stringsAsFactors=TRUE )
 ```
 
 The training data was further processed and then split into training and testing sets so that the model could be pre-tested before being used on the 'real' testing data set.
 
 ```{r}
+# cleaning the data
 #removing the rownumbers, timestamps, window, and usernames as variables
 exercise<-subset(train,select=-c(X,user_name,raw_timestamp_part_1,raw_timestamp_part_2,cvtd_timestamp,new_window,num_window))
+# removing near zero variation columns
+nzv<-nearZeroVar(exercise, saveMetrics=TRUE)
+nzv<-subset(nzv, nzv==TRUE)     
+exercise<-subset(exercise, select = !names(exercise) %in% rownames(nzv)) 
 # removing mostly NA data
-few_na<-apply(!is.na(exercise),2,sum)>19621
-exercise<-exercise[,few_na]
+no_na<-apply(is.na(exercise),2,sum)==0
+exercise<-exercise[,no_na]
+# scale and centre 
+
 #splitting the training data into training and testing data to allow some pre-testing before using the real test set
 inTrain<-createDataPartition(y=exercise$classe,p=0.7,list=F)
 training<-exercise[inTrain,]
@@ -51,12 +57,17 @@ testing<-exercise[-inTrain,]
 The random forest method was used to generate a model because it provides high accuracy and works well with non-linear results. Five-fold Cross-Validation was applied.
 
 ```{r}
+# crossvalidation method defined
+crossVal <-trainControl(method = "cv", number = 5, allowParallel = TRUE, verboseIter = TRUE)
+# set seed
+set.seed(1234)
+# random forest model fitted using crossValidation and pre-processing data by centring and scaling
 modFit<-train(classe ~. , 
               data= training, 
               method="rf" ,
-              trControl=trainControl(method="cv",number=5),
-              prox=TRUE,
-              allowParallel=TRUE)
+              trControl=crossVal,
+              preProcess=c("center","scale")
+              )
 ```
 
 We can check how accurate the model was:
@@ -65,35 +76,38 @@ We can check how accurate the model was:
 modFit$finalModel
 ```
 
-Which tells us there's an OOB error of 25.46%, or that our predictions are accurate 74.54% of the time. We can test this against the internal testing dataset. A problem is that we can only compare the accuracy where a record from the testing set contained data from all the variables used to generate the model, unless we use rfImpute() to impute the missing data.
+Which tells us there's an "Out of Bag" error rate of 0.68%, or that our predictions are accurate 99.41% of the time. We can test this against the internal testing dataset.
 ```{r}
 pred<-predict(modFit, newdata=testing)
-testing<-complete.cases(testing)
-testing$predRight<- pred == testing$classe
-table(pred,testing$classe)
+OOS<-confusionMatrix(pred,testing$classe)
+OOS
 ```
-This allows an estimate of out of sample error, which is c.25%
+This allows an estimate of out of sample accuracy, which we have 95% confidence is between 99.08% and 99.51%. This is very high, meaning the predictive power of the model is good.
 
-We should test now against the real test data.
+We can now apply the model to the real test data to make our final predictions.
 
 ```{r}
 ## now let's get the real test data
 testurl<-'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
-download.file(trainurl,destfile="test.csv", method="curl")
-test<-read.csv("test.csv" )
-summary(test)
-#removing the rownumbers, timestamps, window, and usernames as variables
-testing2<-subset(test,select=-c(X,user_name,raw_timestamp_part_1,raw_timestamp_part_2,cvtd_timestamp,new_window,num_window))
-# removing mostly NA data
-few_na<-apply(!is.na(testing2),2,sum)>19621
-testing2<-testing2[,few_na]
-# comparing
+download.file(testurl,destfile="test.csv", method="curl")
+test<-read.csv("test.csv", stringsAsFactors=TRUE )
+#removing the columns that are not featured in the training set or the model.
+testing2<-test[,names(test) %in% names(training)]
+# making our predictions
 pred2<-predict(modFit, newdata=testing2)
-testing2<-complete.cases(testing2)
-testing2$predRight<- pred == testing2$classe
-table(pred2,testing2$classe)
+pred2<-as.character(pred2)
+
+# writing predictions into individual .txt files to submit for evaluation
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(pred2)
 ```
-This tells us our predictions were accurate in x out of y cases, or x%, meaning the out of sample error rate was 1-x%.
 
 references:
 
